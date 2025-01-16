@@ -8,6 +8,8 @@ This is a comprehensive statistical modelling attempt of Calgary's water pH via 
 
 The data is sourced from <a href="https://data.calgary.ca/Environment/Watershed-Surface-Water-Quality-Data/y8as-bmzj/about_data">Open Source Data of Calgary</a>. 
 
+**Note:** Please download the full dataset from data.calgary.ca (link above), and select date ranges from 2019-11-26 11:00:00 to 2024-09-05 10:15:00.
+
 ## Collaborators and Contributors
 
 This was a course group project. Teammates are listed in the PDF report. 
@@ -24,3 +26,8 @@ We were able to produce the following model:
 <img src="images/full_model_equation.png" alt="Model Equation">
 
 The model has an adjusted R-squared 0.5369 with 0.2032 residual standard error. The model explains 53.69% of the variation found in the dependent variable, pH.
+
+## Future Steps 
+1. Data pipe-lining: Create a workflow from data.calgary.ca to local environment to contribute towards
+2. Consider other modelling methods, multi-linear regression modelling seems to be incompatible with this dataset
+3. Further analysis linking results to basic science to harvest more insights from our analysis 
