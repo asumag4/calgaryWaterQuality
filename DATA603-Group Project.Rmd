@@ -1,0 +1,740 @@
+---
+title: "DATA 603 - Group Project Report"
+author: "L01 - Group 6"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+# Library Import ----------------------------------------------------------
+
+```{r Library Import,echo=FALSE}
+library(tidyr)
+library(dplyr)
+library(olsrr)
+library(ggplot2)
+library(stringr)
+library(lubridate)
+library(mctest)
+library(lmtest)
+library(psych)
+```
+
+# Data Import -------------------------------------------------------------
+
+```{r Raw Data Import,echo=FALSE}
+data=read.csv("water_data.csv")
+```
+
+**Verify**
+
+```{r,echo=FALSE}
+dim(data)
+colnames(data)
+head(data)
+```
+
+# Data Cleaning and Wrangling
+
+```{r Data Cleaning and Wrangling,echo=FALSE}
+# Keep rows where "Field Data Description" equals to "continuous"
+unique(data$Field.Data.Description)
+dim(data)
+
+cleaned_data <- data %>%
+  filter(tolower(str_trim(data$Field.Data.Description)) == "continuous")
+
+# Verify filter result
+unique(cleaned_data$Field.Data.Description)
+dim(cleaned_data)
+```
+
+##Filter non-related parameters. Keep only depth, oxygen, conductivity, turbidity, water temperature, ph
+
+```{r,echo=FALSE}
+cleaned_data <- data %>%
+  filter(Parameter %in% c(
+    "Depth",
+    "Dissolved Oxygen Concentration",
+    "Specific Conductivity",
+    "Turbidity",
+    "Water Temperature",
+    "pH"
+  )) %>%
+  select(Sample.Site, Sample.Date, Parameter, Numeric.Result)
+```
+
+```{r,echo=FALSE}
+# Verify filter result
+cleaned_data %>%
+  distinct(Parameter) %>%
+  arrange(Parameter)
+```
+
+```{r,echo=FALSE}
+# Pivot the data
+cleaned_data <- cleaned_data %>%
+  select(Sample.Site, Sample.Date, Parameter, Numeric.Result) %>%
+  group_by(Sample.Site, Sample.Date, Parameter) %>%
+  summarise(
+    Numeric.Result = mean(Numeric.Result, na.rm = TRUE),
+    .groups = "drop" # dropping groupping, treat all data as one complete dataset
+  ) %>%
+  pivot_wider(
+    names_from = Parameter,
+    values_from = Numeric.Result,
+    names_prefix = "param_"
+  )
+```
+
+```{r,echo=FALSE}
+# Standardize column names
+cleaned_data <- cleaned_data %>%
+  rename(
+    sample_site = `Sample.Site`,
+    sample_date = `Sample.Date`,
+    param_ph = `param_pH`,
+    param_depth = `param_Depth`,
+    param_conductivity = `param_Specific Conductivity`,
+    param_oxygen = `param_Dissolved Oxygen Concentration`,
+    param_turbidity = `param_Turbidity`,
+    param_water_temp = `param_Water Temperature`
+  )
+```
+
+```{r,echo=FALSE}
+# Verify
+dim(cleaned_data)
+colnames(cleaned_data)
+head(cleaned_data)
+```
+
+## Remove Incomplete Records (i.e. param. value is non-numeric)
+
+```{r Remove Incomplete Records,echo=FALSE}
+cleaned_data <- cleaned_data %>%
+  # Convert all param_ columns to numeric. Non-numeric values will be converted to NA
+  mutate_at(vars(starts_with("param_")), as.numeric) %>%    
+  # Filter rows if not all parameters are numeric
+  filter(if_all(starts_with("param_"), function(x) !is.na(x) & is.numeric(x)))
+```
+
+**Verify**
+
+```{r,echo=FALSE}
+dim(cleaned_data)
+colnames(cleaned_data)
+head(cleaned_data)
+```
+
+```{r,echo=FALSE}
+# Standardize column names
+cleaned_data <- cleaned_data %>%
+  rename(
+    sample_site = `sample_site`,
+    sample_date = `sample_date`,
+    ph = `param_ph`,
+    depth = `param_depth`,
+    conductivity = `param_conductivity`,
+    oxygen = `param_oxygen`,
+    turbidity = `param_turbidity`,
+    water_temp = `param_water_temp`
+  )
+```
+
+## Remove outlier in pH field
+
+```{r Remove outlier in pH field,echo=FALSE}
+# no. of row with pH > 12
+cleaned_data %>% 
+  filter(ph > 12) %>% 
+  nrow()
+
+# Remove pH outlier, i.e. pH > 12
+cleaned_data = cleaned_data %>% 
+  filter(ph <= 12)
+
+# Verify
+cleaned_data %>% 
+  filter(ph > 12) %>% 
+  nrow()
+```
+
+## Add a season column
+
+**Season definition** <https://nrc.canada.ca/en/certifications-evaluations-standards/canadas-official-time/3-when-do-seasons-start>
+
+```{r Add a season column,echo=FALSE}
+cleaned_data <- cleaned_data %>%
+  mutate(sample_date = as.POSIXct(sample_date, format = "%m/%d/%Y %I:%M:%S %p")) # sapmle date: 12/25/2023 10:30:45 AM
+
+cleaned_data <- cleaned_data %>%
+  mutate(
+    month = as.numeric(format(sample_date, "%m")),
+    day = as.numeric(format(sample_date, "%d")),
+    season = case_when(
+      # Winter: December 22 to March 19
+      (month == 12 & day >= 22) | (month == 1 | month == 2) | (month == 3 & day < 20) ~ "Winter",
+      
+      # Spring: March 20 to June 20
+      (month == 3 & day >= 20) | (month == 4 | month == 5) | (month == 6 & day < 21) ~ "Spring",
+      
+      # Summer: June 21 to September 22
+      (month == 6 & day >= 21) | (month == 7 | month == 8) | (month == 9 & day < 23) ~ "Summer",
+      
+      # Autumn: September 23 to December 21
+      (month == 9 & day >= 23) | (month == 10 | month == 11) | (month == 12 & day < 22) ~ "Autumn"
+    )
+  )
+
+```
+
+**Drop the temporary helper columns (month, day)**
+
+```{r,echo=FALSE}
+cleaned_data <- cleaned_data %>%
+  select(-month, -day)
+```
+
+**Move season to the second position**
+
+```{r,echo=FALSE}
+cleaned_data <- cleaned_data %>%
+  select(sample_site, season, everything())
+```
+
+## Reorder the records based on date
+
+```{r,echo=FALSE}
+cleaned_data <- cleaned_data %>%
+  arrange(sample_date)
+```
+
+**Verify**
+
+```{r,echo=FALSE}
+dim(cleaned_data)
+colnames(cleaned_data)
+head(cleaned_data)
+```
+
+## Export the cleaned data to a .csv file
+
+```{r Export the cleaned data,echo=FALSE}
+write.csv(cleaned_data, "water_data_cleaned.csv", row.names = FALSE)
+```
+
+## Import the cleaned data from a .csv file
+
+```{r Import the cleaned data,echo=FALSE}
+cleaned_data=read.csv("water_data_cleaned.csv")
+str(cleaned_data)
+```
+
+#Simple linear regression (SLR)
+
+```{r Simple linear regression,echo=FALSE}
+slr_model = lm(ph~water_temp,data=cleaned_data)
+summary(slr_model)
+```
+
+# Pre-modelling testing
+
+## Multicollinearity test (Variance Inflation Factor (VIF))
+
+```{r Checking multicollinearity,echo=FALSE}
+VIF_test_model = lm(ph~water_temp+conductivity+turbidity+oxygen,data=cleaned_data)
+imcdiag(VIF_test_model, method="VIF")
+```
+
+## Scatter Plots for Response (pH) and Predictors (water temp, conductivity, turbidity, and oxygen)
+
+```{r Ploting for the data between the response and the predictors,echo=FALSE}
+ggplot(cleaned_data, aes(x = water_temp, y = ph)) +
+  geom_point(col="#F4A582", stroke=1, fill="#FDDBC7", alpha=.5, size=1) +
+  labs(title = "Scatter Plot of water temp vs pH", x = "water temp", y = "pH")
+ggplot(cleaned_data, aes(x = conductivity, y = ph)) +
+  geom_point(col="#F4A582", stroke=1, fill="#FDDBC7", alpha=.5, size=1) +
+  labs(title = "Scatter Plot of conductivity vs pH", x = "conductivity", y = "pH")
+ggplot(cleaned_data, aes(x = turbidity, y = ph)) +
+  geom_point(col="#F4A582", stroke=1, fill="#FDDBC7", alpha=.5, size=1) +
+  labs(title = "Scatter Plot of turbidity vs pH", x = "turbidity", y = "pH")
+ggplot(cleaned_data, aes(x = oxygen, y = ph)) +
+  geom_point(col="#F4A582", stroke=1, fill="#FDDBC7", alpha=.5, size=1) +
+  labs(title = "Scatter Plot of oxygen vs pH", x = "oxygen", y = "pH")
+```
+
+
+
+#Multiple linear regression (MLR)
+
+##First-order Model
+
+```{r,echo=FALSE}
+# Define the full model
+first_order_model = lm(ph~water_temp+conductivity+turbidity+oxygen+factor(season),data=cleaned_data)
+summary(first_order_model)
+```
+
+
+
+## Stepwise Regression Model
+
+```{r,echo=FALSE}
+# Define the full model
+first_order_model = lm(ph~water_temp+conductivity+turbidity+oxygen+season,data=cleaned_data)
+
+# Perform stepwise regression
+step <- ols_step_both_p(first_order_model, p_enter = 0.05, p_remove = 0.1, details = FALSE)
+
+# Summarize the stepwise regression results
+summary(step$model)
+```
+
+## All-Possible-Regressions Selection Procedure
+
+```{r,echo=FALSE}
+# Define the full model
+first_order_model = lm(ph~water_temp+conductivity+turbidity+oxygen+season,data=cleaned_data)
+
+#Select the subset of predictors that do the best at meeting some well-defined objective criterion, such as having the largest R2 value or the smallest MSE, Mallow's Cp or AIC.
+kbi_subsets=ols_step_best_subset(first_order_model, details=TRUE)
+# for the output interpretation
+kbi_subsets$metrics
+rsquare=c((kbi_subsets$metrics)$rsquare)
+AdjustedR=c((kbi_subsets$metrics)$adjr)
+cp=c((kbi_subsets$metrics)$cp)
+AIC=c((kbi_subsets$metrics)$aic)
+cbind(rsquare,AdjustedR,cp,AIC)
+```
+
+The first-order additive model:
+
+$$ 
+\begin{align}
+\widehat{\text{pH}}_{\text{Season}}
+&=
+\begin{cases}
+6.938 + 0.02813 \cdot \text{water_temp} + 7.323 \times 10^{-5} \cdot \text{conductivity} - 2.137 \times 10^{-4} \cdot \text{turbidity} + 0.09707 \cdot \text{oxygen} & \text{if Autumn} \\
+6.938 + 0.07250 + 0.02813 \cdot \text{water_temp} + 7.323 \times 10^{-5} \cdot \text{conductivity} - 2.137 \times 10^{-4} \cdot \text{turbidity} + 0.09707 \cdot \text{oxygen} & \text{if Spring} \\
+6.938 - 0.002923 + 0.02813 \cdot \text{wate_temp} + 7.323 \times 10^{-5} \cdot \text{conductivity} - 2.137 \times 10^{-4} \cdot \text{turbidity} + 0.09707 \cdot \text{oxygen} & \text{if Summer} \\
+6.938 - 0.07844 + 0.02813 \cdot \text{water_temp} + 7.323 \times 10^{-5} \cdot \text{conductivity} - 2.137 \times 10^{-4} \cdot \text{turbidity} + 0.09707 \cdot \text{oxygen} & \text{if Winter}
+\end{cases}\\
+&=
+\begin{cases}
+6.938 + 0.02813 \cdot \text{water_temp} + 7.323 \times 10^{-5} \cdot \text{conductivity} - 2.137 \times 10^{-4} \cdot \text{turbidity} + 0.09707 \cdot \text{oxygen} & \text{if Autumn} \\
+7.0105 + 0.02813 \cdot \text{water_temp} + 7.323 \times 10^{-5} \cdot \text{conductivity} - 2.137 \times 10^{-4} \cdot \text{turbidity} + 0.09707 \cdot \text{oxygen} & \text{if Spring} \\
+6.935077 + 0.02813 \cdot \text{wate_temp} + 7.323 \times 10^{-5} \cdot \text{conductivity} - 2.137 \times 10^{-4} \cdot \text{turbidity} + 0.09707 \cdot \text{oxygen} & \text{if Summer} \\
+6.85956 + 0.02813 \cdot \text{water_temp} + 7.323 \times 10^{-5} \cdot \text{conductivity} - 2.137 \times 10^{-4} \cdot \text{turbidity} + 0.09707 \cdot \text{oxygen} & \text{if Winter}
+\end{cases}
+\end{align} 
+$$
+
+## Interaction Model
+
+```{r,echo=FALSE}
+interaction_model = lm(ph~(water_temp+conductivity+turbidity+oxygen+factor(season))^2,data=cleaned_data)
+summary(interaction_model)
+```
+
+The interaction model:
+
+$$ 
+\begin{align}
+\widehat{pH} = 
+\begin{cases} 
+6.200 + 0.04852X_{\text{water temp}} + 4.797 \times 10^{-4}X_{\text{conductivity}} + 1.696 \times 10^{-3}X_{\text{turbidity}} + 0.1574X_{\text{oxygen}} \\
+- 8.619 \times 10^{-6}X_{\text{water temp}} X_{\text{conductivity}} - 2.564 \times 10^{-5}X_{\text{water temp}} X_{\text{turbidity}} \\
+- 4.332 \times 10^{-4}X_{\text{water temp}} X_{\text{oxygen}} + 1.552 \times 10^{-7}X_{\text{conductivity}} X_{\text{turbidity}} \\
+- 3.528 \times 10^{-5}X_{\text{conductivity}} X_{\text{oxygen}} - 1.444 \times 10^{-4}X_{\text{turbidity}} X_{\text{oxygen}} \quad \text{(Fall)} \\\\
+
+6.461 + 0.04852X_{\text{water temp}} + 4.797 \times 10^{-4}X_{\text{conductivity}} + 1.696 \times 10^{-3}X_{\text{turbidity}} + 0.1574X_{\text{oxygen}} \\
+- 8.619 \times 10^{-6}X_{\text{water temp}} X_{\text{conductivity}} - 2.564 \times 10^{-5}X_{\text{water temp}} X_{\text{turbidity}} \\
+- 4.332 \times 10^{-4}X_{\text{water temp}} X_{\text{oxygen}} + 1.552 \times 10^{-7}X_{\text{conductivity}} X_{\text{turbidity}} \\
+- 3.528 \times 10^{-5}X_{\text{conductivity}} X_{\text{oxygen}} - 1.444 \times 10^{-4}X_{\text{turbidity}} X_{\text{oxygen}} + 0.2619 \\
+- 9.021 \times 10^{-3}X_{\text{water temp}} + 6.832 \times 10^{-5}X_{\text{conductivity}} \\
+- 5.994 \times 10^{-4}X_{\text{turbidity}} - 1.566 \times 10^{-2}X_{\text{oxygen}} \quad \text{(Spring)} \\\\
+
+6.292 + 0.04852X_{\text{water temp}} + 4.797 \times 10^{-4}X_{\text{conductivity}} + 1.696 \times 10^{-3}X_{\text{turbidity}} + 0.1574X_{\text{oxygen}} \\
+- 8.619 \times 10^{-6}X_{\text{water temp}} X_{\text{conductivity}} - 2.564 \times 10^{-5}X_{\text{water temp}} X_{\text{turbidity}} \\
+- 4.332 \times 10^{-4}X_{\text{water temp}} X_{\text{oxygen}} + 1.552 \times 10^{-7}X_{\text{conductivity}} X_{\text{turbidity}} \\
+- 3.528 \times 10^{-5}X_{\text{conductivity}} X_{\text{oxygen}} - 1.444 \times 10^{-4}X_{\text{turbidity}} X_{\text{oxygen}} + 0.09127 \\
+- 3.629 \times 10^{-3}X_{\text{water temp}} + 6.592 \times 10^{-5}X_{\text{conductivity}} \\
+- 4.038 \times 10^{-4}X_{\text{turbidity}} - 1.332 \times 10^{-2}X_{\text{oxygen}} \quad \text{(Summer)} \\\\
+
+5.854 + 0.04852X_{\text{water temp}} + 4.797 \times 10^{-4}X_{\text{conductivity}} + 1.696 \times 10^{-3}X_{\text{turbidity}} + 0.1574X_{\text{oxygen}} \\
+- 8.619 \times 10^{-6}X_{\text{water temp}} X_{\text{conductivity}} - 2.564 \times 10^{-5}X_{\text{water temp}} X_{\text{turbidity}} \\
+- 4.332 \times 10^{-4}X_{\text{water temp}} X_{\text{oxygen}} + 1.552 \times 10^{-7}X_{\text{conductivity}} X_{\text{turbidity}} \\
+- 3.528 \times 10^{-5}X_{\text{conductivity}} X_{\text{oxygen}} - 1.444 \times 10^{-4}X_{\text{turbidity}} X_{\text{oxygen}} - 0.3460 \\
++ 2.362 \times 10^{-2}X_{\text{water temp}} - 3.739 \times 10^{-5}X_{\text{conductivity}} \\
+- 2.327 \times 10^{-4}X_{\text{turbidity}} + 2.237 \times 10^{-2}X_{\text{oxygen}} \quad \text{(Winter)} \\\\
+\end{cases}
+
+\end{align} 
+$$
+
+## Correllation Matrix
+
+```{r,echo=FALSE}
+# Create a new data frame with selected columns
+correlation_data <- data.frame(
+  ph = cleaned_data$ph,
+  water_temp = cleaned_data$water_temp,
+  conductivity = cleaned_data$conductivity,
+  turbidity = cleaned_data$turbidity,
+  oxygen = cleaned_data$oxygen
+)
+
+# View the first few rows of the new data frame
+head(correlation_data)
+```
+
+```{r Correllation Matrix,echo=FALSE}
+library(psych)
+# Compute correlations and p-values
+result <- corr.test(correlation_data)
+
+# Access correlation coefficients
+cor_matrix <- result$r
+
+# Access p-values
+p_matrix <- result$p
+
+# Display results
+print(cor_matrix)
+print(p_matrix)
+```
+
+## Second-order model
+
+```{r,echo=FALSE}
+second_order_model = lm(ph~(water_temp+conductivity+turbidity+oxygen+factor(season))^2+I(oxygen^2),data=cleaned_data)
+summary(second_order_model)
+```
+
+The second-order interaction model:
+
+$$ 
+\begin{align}
+\widehat{pH} = 
+\begin{cases} 
+5.974 + 0.04906X_{\text{water temp}} + 4.800 \times 10^{-4}X_{\text{conductivity}} + 1.895 \times 10^{-3}X_{\text{turbidity}} + 0.1982X_{\text{oxygen}} \\
+- 1.816 \times 10^{-3}X_{\text{oxygen}}^2 - 7.812 \times 10^{-6}X_{\text{water temp}} X_{\text{conductivity}} - 2.555 \times 10^{-5}X_{\text{water temp}} X_{\text{turbidity}} \\
+- 4.983 \times 10^{-4}X_{\text{water temp}} X_{\text{oxygen}} + 1.045 \times 10^{-7}X_{\text{conductivity}} X_{\text{turbidity}} - 3.510 \times 10^{-5}X_{\text{conductivity}} X_{\text{oxygen}} \\
+- 1.594 \times 10^{-4}X_{\text{turbidity}} X_{\text{oxygen}} \quad \text{(Fall)} \\\\
+
+6.236 + 0.04906X_{\text{water temp}} + 4.800 \times 10^{-4}X_{\text{conductivity}} + 1.895 \times 10^{-3}X_{\text{turbidity}} + 0.1982X_{\text{oxygen}} \\
+- 1.816 \times 10^{-3}X_{\text{oxygen}}^2 - 7.812 \times 10^{-6}X_{\text{water temp}} X_{\text{conductivity}} - 2.555 \times 10^{-5}X_{\text{water temp}} X_{\text{turbidity}} \\
+- 4.983 \times 10^{-4}X_{\text{water temp}} X_{\text{oxygen}} + 1.045 \times 10^{-7}X_{\text{conductivity}} X_{\text{turbidity}} - 3.510 \times 10^{-5}X_{\text{conductivity}} X_{\text{oxygen}} \\
+- 1.594 \times 10^{-4}X_{\text{turbidity}} X_{\text{oxygen}} + 0.2624 - 8.893 \times 10^{-3}X_{\text{water temp}} \\
++ 6.680 \times 10^{-5}X_{\text{conductivity}} - 6.210 \times 10^{-4}X_{\text{turbidity}} - 1.578 \times 10^{-2}X_{\text{oxygen}} \quad \text{(Spring)} \\\\
+
+6.130 + 0.04906X_{\text{water temp}} + 4.800 \times 10^{-4}X_{\text{conductivity}} + 1.895 \times 10^{-3}X_{\text{turbidity}} + 0.1982X_{\text{oxygen}} \\
+- 1.816 \times 10^{-3}X_{\text{oxygen}}^2 - 7.812 \times 10^{-6}X_{\text{water temp}} X_{\text{conductivity}} - 2.555 \times 10^{-5}X_{\text{water temp}} X_{\text{turbidity}} \\
+- 4.983 \times 10^{-4}X_{\text{water temp}} X_{\text{oxygen}} + 1.045 \times 10^{-7}X_{\text{conductivity}} X_{\text{turbidity}} - 3.510 \times 10^{-5}X_{\text{conductivity}} X_{\text{oxygen}} \\
+- 1.594 \times 10^{-4}X_{\text{turbidity}} X_{\text{oxygen}} + 0.1568 - 3.416 \times 10^{-3}X_{\text{water temp}} \\
++ 6.754 \times 10^{-5}X_{\text{conductivity}} - 4.797 \times 10^{-4}X_{\text{turbidity}} - 2.061 \times 10^{-2}X_{\text{oxygen}} \quad \text{(Summer)} \\\\
+
+5.559 + 0.04906X_{\text{water temp}} + 4.800 \times 10^{-4}X_{\text{conductivity}} + 1.895 \times 10^{-3}X_{\text{turbidity}} + 0.1982X_{\text{oxygen}} \\
+- 1.816 \times 10^{-3}X_{\text{oxygen}}^2 - 7.812 \times 10^{-6}X_{\text{water temp}} X_{\text{conductivity}} - 2.555 \times 10^{-5}X_{\text{water temp}} X_{\text{turbidity}} \\
+- 4.983 \times 10^{-4}X_{\text{water temp}} X_{\text{oxygen}} + 1.045 \times 10^{-7}X_{\text{conductivity}} X_{\text{turbidity}} - 3.510 \times 10^{-5}X_{\text{conductivity}} X_{\text{oxygen}} \\
+- 1.594 \times 10^{-4}X_{\text{turbidity}} X_{\text{oxygen}} - 0.4149 + 2.363 \times 10^{-2}X_{\text{water temp}} \\
+- 3.393 \times 10^{-5}X_{\text{conductivity}} - 2.229 \times 10^{-4}X_{\text{turbidity}} + 2.777 \times 10^{-2}X_{\text{oxygen}} \quad \text{(Winter)} \\\\
+\end{cases}
+
+\end{align} 
+$$
+
+
+# Checking the regression assumptions
+
+```{r Model Diagnostics,echo=FALSE}
+par(mfrow=c(2,2))
+plot(interaction_model, col="#F4A582")
+```
+
+## Linearity Assumption
+
+The residual plot (the top left plot) shows no discernible pattern, so this assumption is hold.
+
+## Independence Assumption
+
+We do not use the date and time data in our analysis, so the error terms are uncorrelated. So, this assumption is hold.
+
+## Equal Variance Assumption
+
+$$
+\begin{aligned}
+H_0:&\mbox{ heteroscedasticity is not present (homoscedasticity)}\\
+H_a~:&\mbox{ heteroscedasticity is present} \\
+or \\
+H_0:& \sigma^2_1=\sigma^2_2=...=\sigma^2_n\\
+H_0:& \mbox{ at least one }\sigma^2_i\mbox{ is different from the others } i=1,2,...,n
+\end{aligned}
+$$
+
+```{r,echo=FALSE}
+#The Breusch-Pagan Test
+bptest(interaction_model)
+```
+
+The $P-value< 2.2e-16$ is very small, so the null hypothesis is rejected. It means that, heteroskedasticity is present.
+
+## Normality Assumption
+
+-   The Hypotheses these tests test are:
+
+$$
+\begin{aligned}
+H_0:&\mbox{ the sample data are significantly normally distributed}\\
+H_a:&\mbox{ the sample data are not significantly normally distributed } \\
+\end{aligned}
+$$
+
+Due to the large sample size, we use Kolmogorov-Smirnov test for normality.
+
+```{r,echo=FALSE}
+#Kolmogorov-Smirnov Test
+ks.test(residuals(interaction_model), "pnorm", 
+                   mean = mean(residuals(interaction_model)), 
+                   sd = sd(residuals(interaction_model)))
+```
+
+The $P-value< 2.2e-16$ is very small, so the null hypothesis is rejected. It means that the sample data are not significantly normally distributed.
+
+## Apply log-transformation and re-tesing with normality and heteroskedasticity
+
+We use log transformation with ph variable and rerun the model and tests to check for improvement.
+
+```{r,echo=FALSE}
+log_transformed_model = lm(log(ph)~(water_temp+conductivity+turbidity+oxygen+factor(season))^2,data=cleaned_data)
+summary(log_transformed_model)
+
+#The Breusch-Pagan Test
+bptest(log_transformed_model)
+
+#Kolmogorov-Smirnov Test
+ks.test(residuals(log_transformed_model), "pnorm", 
+                   mean = mean(residuals(log_transformed_model)), 
+                   sd = sd(residuals(log_transformed_model)))
+```
+
+```{r,echo=FALSE}
+# Check residuals after transformation
+plot(fitted(log_transformed_model), residuals(log_transformed_model))
+abline(h = 0, col = "red")
+```
+
+Unfortunately, because the sample data severely violates assumptions, the log transformation cannot solve the issue. The non-parametric methods or robust models could be considered to implement. However, these kind of models is out of scope of this course. So, this is the limitation of this project could be improved in the future.
+
+# Outliers
+
+```{r,echo=FALSE}
+cleaned_data[cooks.distance(interaction_model)>0.5,]
+plot(interaction_model,pch=18,col="red",which=c(4)) #which =4 only prints the cook distance plot.
+```
+
+```{r Model Diagnostics without the Influential Points,echo=FALSE}
+model_without_influential_points = lm(ph~(water_temp+conductivity+turbidity+oxygen+factor(season))^2, cleaned_data[-c(880189,63352,63322),])
+summary(model_without_influential_points)
+```
+
+# Prediction
+
+## Point prediction of the day in which the water has the highest temperature
+
+```{r}
+# Find the maximum temperature
+max_water_temp <- max(cleaned_data$water_temp, na.rm = TRUE)
+
+# Find the observation(s) with the highest temperature
+highest_water_temp_row <- cleaned_data[cleaned_data$water_temp == max_water_temp, ]
+
+# Print the result
+print(highest_water_temp_row)
+
+# Create new data frame
+newdata = data.frame(water_temp=highest_water_temp_row$water_temp, conductivity=highest_water_temp_row$conductivity,turbidity=highest_water_temp_row$turbidity,oxygen=highest_water_temp_row$oxygen,season=highest_water_temp_row$season)
+
+# Point prediction
+predict(interaction_model,newdata,interval="predict")
+```
+
+## Period prediction and comparison with the real value
+Based on the 3-month dataset from September 06, 2024 to October 11, 2024, we predict the ph and compare with the real data.
+
+```{r,echo=FALSE}
+rest=read.csv("prediction_data.csv")
+
+cleaned_data_test <- rest %>%
+  filter(Parameter %in% c(
+    "Depth",
+    "Dissolved Oxygen Concentration",
+    "Specific Conductivity",
+    "Turbidity",
+    "Water Temperature",
+    "pH"
+  )) %>%
+  select(Sample.Site, Sample.Date, Parameter, Numeric.Result)
+
+
+# Verify filter result
+cleaned_data_test %>%
+  distinct(Parameter) %>%
+  arrange(Parameter)
+
+
+# Pivot the data
+cleaned_data_test <- cleaned_data_test %>%
+  select(Sample.Site, Sample.Date, Parameter, Numeric.Result) %>%
+  group_by(Sample.Site, Sample.Date, Parameter) %>%
+  summarise(
+    Numeric.Result = mean(Numeric.Result, na.rm = TRUE),
+    .groups = "drop" # dropping groupping, treat all data as one complete dataset
+  ) %>%
+  pivot_wider(
+    names_from = Parameter,
+    values_from = Numeric.Result,
+    names_prefix = "param_"
+  )
+colnames(cleaned_data_test)
+# Standardize column names
+cleaned_data_test <- cleaned_data_test %>%
+  rename(
+    sample_site = Sample.Site,
+    sample_date = Sample.Date,
+    param_ph = param_pH,
+    param_depth = param_Depth,
+    param_conductivity = `param_Specific Conductivity`,
+    param_oxgen = `param_Dissolved Oxygen Concentration`,
+    param_turbidity = param_Turbidity,
+    param_water_temp = `param_Water Temperature`
+  )
+
+# Verify
+dim(cleaned_data_test)
+colnames(cleaned_data_test)
+head(cleaned_data_test)
+
+
+# Remove Incomplete Records (i.e. param. value is non-numeric)
+cleaned_data_test <- cleaned_data_test %>%
+  # Convert all param_ columns to numeric. Non-numeric values will be converted to NA
+  mutate_at(vars(starts_with("param_")), as.numeric) %>%    
+  # Filter rows if not all parameters are numeric
+  filter(if_all(starts_with("param_"), function(x) !is.na(x) & is.numeric(x)))
+
+
+# Verify
+dim(cleaned_data_test)
+colnames(cleaned_data_test)
+head(cleaned_data_test)
+
+
+# Add a season column
+# season definition https://nrc.canada.ca/en/certifications-evaluations-standards/canadas-official-time/3-when-do-seasons-start
+cleaned_data_test <- cleaned_data_test %>%
+  mutate(sample_date = as.POSIXct(sample_date, format = "%m/%d/%Y %I:%M:%S %p")) # sapmle date: 12/25/2023 10:30:45 AM
+
+cleaned_data_test <- cleaned_data_test %>%
+  mutate(
+    month = as.numeric(format(sample_date, "%m")),
+    day = as.numeric(format(sample_date, "%d")),
+    season = case_when(
+      # Winter: December 22 to March 19
+      (month == 12 & day >= 22) | (month == 1 | month == 2) | (month == 3 & day < 20) ~ "Winter",
+      
+      # Spring: March 20 to June 20
+      (month == 3 & day >= 20) | (month == 4 | month == 5) | (month == 6 & day < 21) ~ "Spring",
+      
+      # Summer: June 21 to September 22
+      (month == 6 & day >= 21) | (month == 7 | month == 8) | (month == 9 & day < 23) ~ "Summer",
+      
+      # Autumn: September 23 to December 21
+      (month == 9 & day >= 23) | (month == 10 | month == 11) | (month == 12 & day < 22) ~ "Autumn"
+    )
+  )
+
+# Drop the temporary helper columns (month, day)
+cleaned_data_test <- cleaned_data_test %>%
+  select(-month, -day)
+
+# Move season to the second position
+cleaned_data_test <- cleaned_data_test %>%
+  select(sample_site, season, everything())
+
+# Reorder the records based on date
+cleaned_data_test <- cleaned_data_test %>%
+  arrange(sample_date)
+
+# Verify
+dim(cleaned_data_test)
+colnames(cleaned_data_test)
+head(cleaned_data_test)
+
+
+#-----------------------------------------run maps
+
+
+#changeing cleaned_data_test col names to fit the model - by aomine
+
+cleaned_data_test <- cleaned_data_test %>%
+  rename(
+    ph=param_ph,
+water_temp=param_water_temp,
+conductivity=param_conductivity,
+turbidity=param_turbidity,
+oxygen=param_oxgen,
+season=season
+    
+  )
+
+cleaned_data_test<- cleaned_data_test%>%select(ph,water_temp,conductivity,turbidity,oxygen,season)
+colnames(cleaned_data_test)
+
+test_data= cleaned_data_test
+  
+predictions = predict(interaction_model, newdata = test_data)
+summary(interaction_model)
+
+plot_data = data.frame(
+  Observed = test_data$ph,
+  Predicted = predictions
+)
+#ggplot(plot_data, aes(x = Observed, y = Predicted)) +
+ # geom_line(color = "blue", size = 1.2, linetype = "solid") + 
+  #geom_point(color = "red", size = 2) +
+  #labs(
+   # title = "act vs pred pH vals",
+    #x = "observed pH",
+    #y = "predicted pH",
+    #color = "Legend"
+  #)
+print(test_data$ph)
+print(predictions)
+
+#two_pred=predictions*2
+#two_pred
+
+#plot(test_data$ph,type='l',col='blue')
+#lines(predictions,type='l',col='red')
+
+length(predictions)
+length(test_data$ph)
+
+plot(test_data$ph, 
+     type = 'l', 
+     col = 'blue', 
+     xlab = 'Index', 
+     ylab = 'pH', 
+     main = 'Actual vs Predicted pH Values')
+
+lines(predictions, 
+      type = 'l', 
+      col = 'red')
+
+legend("topright", 
+       legend = c("Actual pH", "Predicted pH"), 
+       col = c("blue", "red"), 
+       lty = 1, 
+      cex = 0.8)
+```
